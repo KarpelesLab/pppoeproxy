@@ -3,10 +3,9 @@ package main
 import (
 	"flag"
 	"log"
-	"os"
-	"os/signal"
 
-	"golang.org/x/sys/unix"
+	"github.com/KarpelesLab/goupd"
+	"github.com/KarpelesLab/shutdown"
 )
 
 var (
@@ -18,6 +17,7 @@ var (
 
 func main() {
 	flag.Parse()
+	goupd.AutoUpdate(false)
 
 	if *interfaceName == "" {
 		log.Fatal("Interface name must be specified")
@@ -52,8 +52,7 @@ func main() {
 	defer proxy.Close()
 
 	// Setup signal handling for graceful shutdown
-	signalCh := make(chan os.Signal, 1)
-	signal.Notify(signalCh, unix.SIGINT, unix.SIGTERM)
+	shutdown.SetupSignals()
 
 	log.Printf("PPPoE proxy started in %s mode on interface %s", *mode, *interfaceName)
 	if *mode == "server" {
@@ -63,6 +62,6 @@ func main() {
 	}
 
 	// Wait for termination signal
-	<-signalCh
+	shutdown.Wait()
 	log.Println("Shutting down...")
 }
