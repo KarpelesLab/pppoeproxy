@@ -64,6 +64,54 @@ In Japan, NTT allows up to 2 PPPoE sessions on a single line. This enables an in
 
 This effectively allows you to share your NTT connection with a remote location while maintaining separate PPPoE sessions, each with its own public IP address.
 
+### Setting Up the Macvlan Interface
+
+On your primary device that's connected to the NTT line, create a macvlan interface:
+
+```bash
+# Create a macvlan interface attached to your physical interface (e.g., eth0)
+sudo ip link add link eth0 pppoe-proxy type macvlan mode bridge
+
+# Set a unique MAC address for this interface
+sudo ip link set pppoe-proxy address 00:11:22:33:44:55
+
+# Bring the interface up
+sudo ip link set pppoe-proxy up
+```
+
+### Running the Server
+
+On the same primary device, run the PPPoE proxy in server mode:
+
+```bash
+# Run the server on the macvlan interface, listening on port 8000
+sudo ./pppoeproxy -interface pppoe-proxy -mode server -address 0.0.0.0:8000 -allow 192.168.1.2
+```
+
+Replace `192.168.1.2` with the IP address of your remote client device.
+
+### Running the Client
+
+On the remote device:
+
+```bash
+# Run the client connecting to the server's IP address
+sudo ./pppoeproxy -interface eth0 -mode client -address 192.168.1.1:8000
+```
+
+Replace `eth0` with your network interface and `192.168.1.1` with the IP address of your server.
+
+### Setting Up the PPPoE Client
+
+On the remote device, configure your PPPoE client software to connect through the proxy:
+
+```bash
+# Example using pppd for Linux
+sudo pppd plugin rp-pppoe.so eth0 user "your-username" password "your-password" noauth
+```
+
+Once connected, the remote device will have its own public IP address through the NTT line.
+
 ## Building
 
 ```
