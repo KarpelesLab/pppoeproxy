@@ -19,7 +19,6 @@ The system operates in either client or server mode:
 
 - Proxying of PPPoE Discovery packets (0x8863)
 - Proxying of PPPoE Session packets (0x8864)
-- Host-Uniq tag rewriting for secure client-server authentication
 - Raw socket handling for efficient packet capture and injection
 - IP-based access control for client connections
 - Automatic reconnection for client mode
@@ -47,7 +46,7 @@ The system operates in either client or server mode:
 
 1. **PPPoE Discovery Phase**:
    - In client mode, captures PADI, PADO, PADR, and PADS packets
-   - In server mode, captures packets and rewrites Host-Uniq tags with a value derived from the shared secret
+   - In server mode, captures and forwards packets to connected clients
    - Forwards packets between the client, server, and the actual PPPoE server
 
 2. **PPPoE Session Phase**:

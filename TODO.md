@@ -27,7 +27,6 @@ Implementation includes:
    - [x] Packet loss handling (drop silently)
 
 3. **Authentication and Security**
-   - [x] Implement Host-Uniq tag rewriting
    - [x] Add IP-based client access control
 
 ### Medium Priority

@@ -96,46 +96,8 @@ func (h *DiscoveryHandler) handlePacket(packet []byte) {
 		return
 	}
 
-	// Extract packet type code
-	code := pppoeHeader[1]
-
-	// If we're in server mode and this is a PADI, handle Host-Uniq rewriting
-	if h.isServer && code == PADI {
-		h.rewriteHostUniq(packet)
-	}
-
 	// Forward the packet to the appropriate endpoint
 	h.forwardPacket(packet)
-}
-
-// rewriteHostUniq rewrites the Host-Uniq tag in a PADI packet
-func (h *DiscoveryHandler) rewriteHostUniq(packet []byte) {
-	// PPPoE header is 6 bytes, so tags start at offset 20 (14 + 6)
-	offset := 20
-
-	// Process all tags
-	for offset+4 <= len(packet) {
-		tagType := binary.BigEndian.Uint16(packet[offset : offset+2])
-		tagLen := binary.BigEndian.Uint16(packet[offset+2 : offset+4])
-
-		if tagType == TagHostUniq && offset+4+int(tagLen) <= len(packet) {
-			// Found Host-Uniq tag, rewrite it with simple XOR
-			// This is just a placeholder; in a real implementation,
-			// you might want a more sophisticated approach
-			for i := 0; i < int(tagLen); i++ {
-				packet[offset+4+i] ^= byte(0x42) // Simple XOR with a constant
-			}
-			return
-		}
-
-		// Move to next tag
-		offset += 4 + int(tagLen)
-
-		// End of tags
-		if tagType == TagEndOfList {
-			break
-		}
-	}
 }
 
 // forwardPacket forwards the packet to the appropriate endpoint
