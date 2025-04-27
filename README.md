@@ -53,6 +53,17 @@ The system operates in either client or server mode:
    - Captures and forwards session packets to maintain the tunnel
    - Preserves PPPoE session IDs and packet integrity
 
+## Use Case: NTT Lines in Japan
+
+In Japan, NTT allows up to 2 PPPoE sessions on a single line. This enables an interesting use case:
+
+1. Set up a macvlan interface on your primary internet-connected device
+2. Run this proxy in server mode on that macvlan interface
+3. Run a client on a remote device (e.g., in another location)
+4. The remote device can now establish its own PPPoE session through your NTT line
+
+This effectively allows you to share your NTT connection with a remote location while maintaining separate PPPoE sessions, each with its own public IP address.
+
 ## Building
 
 ```
