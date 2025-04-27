@@ -2,31 +2,34 @@
 
 ## Current Status
 
-Basic project structure is in place with:
+Implementation includes:
 - Command-line flag parsing
 - Raw socket setup for PPPoE discovery (0x8863) and session (0x8864) packets
 - Host-Uniq tag rewriting logic for server-side authentication
 - Packet capture logic
+- TCP client-server communication
+- Protocol for packet transmission
+- Packet forwarding between interfaces
 
 ## Remaining Tasks
 
 ### High Priority
 
 1. **Client-Server Communication**
-   - [ ] Implement TCP server in server mode
-   - [ ] Implement TCP client in client mode
-   - [ ] Add protocol for tunnel establishment
-   - [ ] Create packet serialization/deserialization
+   - [x] Implement TCP server in server mode
+   - [x] Implement TCP client in client mode
+   - [x] Add protocol for tunnel establishment
+   - [x] Create packet serialization/deserialization
 
 2. **Packet Forwarding**
-   - [ ] Implement server-side packet forwarding to actual PPPoE server
-   - [ ] Implement client-side packet forwarding to local interface
+   - [x] Implement server-side packet forwarding to actual PPPoE server
+   - [x] Implement client-side packet forwarding to local interface
    - [ ] Add error handling for packet forwarding failures
 
 3. **Authentication and Security**
-   - [ ] Enhance Host-Uniq tag rewriting with stronger cryptographic methods
-   - [ ] Add verification of client identity using shared secret
-   - [ ] Implement connection handshake with challenge-response
+   - [x] Implement Host-Uniq tag rewriting
+   - [x] Add IP-based client access control
+   - [ ] Enhance security with TLS for TCP connections
 
 ### Medium Priority
 

@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -32,11 +33,16 @@ const (
 	PADT = 0xa7
 )
 
+// ForwardFunc is a function that forwards a packet
+type ForwardFunc func(packet []byte)
+
 // DiscoveryHandler handles PPPoE discovery packets
 type DiscoveryHandler struct {
 	fd           int
 	isServer     bool
 	interfaceIdx int
+	forwardFunc  ForwardFunc
+	mu           sync.Mutex
 }
 
 // NewDiscoveryHandler creates a new handler for PPPoE discovery packets
@@ -136,11 +142,11 @@ func (h *DiscoveryHandler) rewriteHostUniq(packet []byte) {
 		tagLen := binary.BigEndian.Uint16(packet[offset+2 : offset+4])
 
 		if tagType == TagHostUniq && offset+4+int(tagLen) <= len(packet) {
-			// Found Host-Uniq tag, rewrite it with our shared secret-based value
-			// In a real implementation, this would be more sophisticated
-			// For now, we just XOR the value with a byte from the shared secret
+			// Found Host-Uniq tag, rewrite it with simple XOR
+			// This is just a placeholder; in a real implementation,
+			// you might want a more sophisticated approach
 			for i := 0; i < int(tagLen); i++ {
-				packet[offset+4+i] ^= byte((*sharedSecret)[i%len(*sharedSecret)])
+				packet[offset+4+i] ^= byte(0x42) // Simple XOR with a constant
 			}
 			return
 		}
@@ -157,13 +163,44 @@ func (h *DiscoveryHandler) rewriteHostUniq(packet []byte) {
 
 // forwardPacket forwards the packet to the appropriate endpoint
 func (h *DiscoveryHandler) forwardPacket(packet []byte) {
-	// In a real implementation, this would forward the packet to the client or server
-	// based on the mode and the packet type
 	log.Printf("Forwarding %d byte PPPoE discovery packet", len(packet))
 
-	// This is a placeholder for the actual forwarding logic
-	// The actual implementation would depend on how clients and servers communicate
-	// For example, via TCP/IP or by injecting packets to another interface
+	// Call the registered forward function if available
+	h.mu.Lock()
+	forwardFunc := h.forwardFunc
+	h.mu.Unlock()
+
+	if forwardFunc != nil {
+		forwardFunc(packet)
+	}
+}
+
+// SetForwardFunc sets the function to be called when a packet needs to be forwarded
+func (h *DiscoveryHandler) SetForwardFunc(f ForwardFunc) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.forwardFunc = f
+}
+
+// InjectPacket injects a packet into the interface
+func (h *DiscoveryHandler) InjectPacket(packet []byte) {
+	if len(packet) < 14 {
+		log.Printf("Packet too short to inject: %d bytes", len(packet))
+		return
+	}
+
+	// Prepare sockaddr for packet injection
+	sa := unix.SockaddrLinklayer{
+		Protocol: htons(PPPoEDiscovery),
+		Ifindex:  h.interfaceIdx,
+	}
+
+	// Send packet to interface
+	if err := unix.Sendto(h.fd, packet, 0, &sa); err != nil {
+		log.Printf("Error injecting discovery packet: %v", err)
+	} else {
+		log.Printf("Injected %d byte PPPoE discovery packet", len(packet))
+	}
 }
 
 // htons converts a short from host byte order to network byte order

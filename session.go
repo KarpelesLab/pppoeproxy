@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"net"
+	"sync"
 
 	"golang.org/x/sys/unix"
 )
@@ -13,6 +14,8 @@ type SessionHandler struct {
 	fd           int
 	isServer     bool
 	interfaceIdx int
+	forwardFunc  ForwardFunc
+	mu           sync.Mutex
 }
 
 // NewSessionHandler creates a new handler for PPPoE session packets
@@ -95,11 +98,42 @@ func (h *SessionHandler) handlePacket(packet []byte) {
 
 // forwardPacket forwards the packet to the appropriate endpoint
 func (h *SessionHandler) forwardPacket(packet []byte) {
-	// In a real implementation, this would forward the packet to the client or server
-	// based on the mode and the packet type
 	log.Printf("Forwarding %d byte PPPoE session packet", len(packet))
 
-	// This is a placeholder for the actual forwarding logic
-	// The actual implementation would depend on how clients and servers communicate
-	// For example, via TCP/IP or by injecting packets to another interface
+	// Call the registered forward function if available
+	h.mu.Lock()
+	forwardFunc := h.forwardFunc
+	h.mu.Unlock()
+
+	if forwardFunc != nil {
+		forwardFunc(packet)
+	}
+}
+
+// SetForwardFunc sets the function to be called when a packet needs to be forwarded
+func (h *SessionHandler) SetForwardFunc(f ForwardFunc) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	h.forwardFunc = f
+}
+
+// InjectPacket injects a packet into the interface
+func (h *SessionHandler) InjectPacket(packet []byte) {
+	if len(packet) < 14 {
+		log.Printf("Packet too short to inject: %d bytes", len(packet))
+		return
+	}
+
+	// Prepare sockaddr for packet injection
+	sa := unix.SockaddrLinklayer{
+		Protocol: htons(PPPoESession),
+		Ifindex:  h.interfaceIdx,
+	}
+
+	// Send packet to interface
+	if err := unix.Sendto(h.fd, packet, 0, &sa); err != nil {
+		log.Printf("Error injecting session packet: %v", err)
+	} else {
+		log.Printf("Injected %d byte PPPoE session packet", len(packet))
+	}
 }

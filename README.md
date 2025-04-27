@@ -21,12 +21,16 @@ The system operates in either client or server mode:
 - Proxying of PPPoE Session packets (0x8864)
 - Host-Uniq tag rewriting for secure client-server authentication
 - Raw socket handling for efficient packet capture and injection
-- Simple shared secret authentication between client and server
+- IP-based access control for client connections
 
 ## Usage
 
 ```
-./pppoeproxy -interface eth0 -mode client -address 192.168.1.1:8000 -secret mysecretkey
+# Server Mode
+./pppoeproxy -interface eth0 -mode server -address 0.0.0.0:8000 -allow 192.168.1.2
+
+# Client Mode
+./pppoeproxy -interface eth0 -mode client -address 192.168.1.1:8000
 ```
 
 ### Command Line Options
@@ -34,7 +38,7 @@ The system operates in either client or server mode:
 - `-interface`: Network interface to capture and inject PPPoE packets (required)
 - `-mode`: Operation mode, either "client" or "server" (default: "client")
 - `-address`: Address to connect to (client mode) or listen on (server mode) (required)
-- `-secret`: Shared secret for client-server authentication (required)
+- `-allow`: IP address allowed to connect (server mode only, default: "127.0.0.1")
 
 ## How It Works
 

@@ -18,7 +18,7 @@ var (
 	interfaceName = flag.String("interface", "", "Interface to bind to")
 	mode          = flag.String("mode", "client", "Mode (client or server)")
 	address       = flag.String("address", "", "Address to bind to (server) or connect to (client)")
-	sharedSecret  = flag.String("secret", "", "Shared secret for authentication")
+	allowedIP     = flag.String("allow", "127.0.0.1", "IP address allowed to connect (server mode only)")
 )
 
 func main() {
@@ -36,10 +36,6 @@ func main() {
 		log.Fatal("Address must be specified")
 	}
 
-	if *sharedSecret == "" {
-		log.Fatal("Shared secret must be specified")
-	}
-
 	// Initialize discovery and session handlers
 	discoveryHandler, err := NewDiscoveryHandler(*interfaceName, *mode == "server")
 	if err != nil {
@@ -52,6 +48,13 @@ func main() {
 		log.Fatalf("Failed to initialize session handler: %v", err)
 	}
 	defer sessionHandler.Close()
+
+	// Initialize proxy
+	proxy, err := NewProxy(*mode == "server", *address, *allowedIP, discoveryHandler, sessionHandler)
+	if err != nil {
+		log.Fatalf("Failed to initialize proxy: %v", err)
+	}
+	defer proxy.Close()
 
 	// Setup signal handling for graceful shutdown
 	signalCh := make(chan os.Signal, 1)
