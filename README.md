@@ -70,13 +70,13 @@ On your primary device that's connected to the NTT line, create a macvlan interf
 
 ```bash
 # Create a macvlan interface attached to your physical interface (e.g., eth0)
-sudo ip link add link eth0 pppoe-proxy type macvlan mode bridge
+sudo ip link add link eth0 name pppoe-proxy type macvlan mode bridge
 
 # Set a unique MAC address for this interface
-sudo ip link set pppoe-proxy address 00:11:22:33:44:55
+sudo ip link set dev pppoe-proxy address 00:11:22:33:44:55
 
 # Bring the interface up
-sudo ip link set pppoe-proxy up
+sudo ip link set dev pppoe-proxy up
 ```
 
 ### Running the Server
