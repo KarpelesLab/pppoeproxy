@@ -1,6 +1,7 @@
 package main
 
 import (
+	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
@@ -92,14 +93,42 @@ func (h *SessionHandler) handlePacket(packet []byte) {
 		return
 	}
 
+	// Extract the session ID
+	sessionID := binary.BigEndian.Uint16(pppoeHeader[2:4])
+
+	// Check if this is a session establishment or termination
+	if len(pppoeHeader) >= 8 { // PPPoE header (6) + at least protocol (2)
+		// Get the PPP protocol type
+		protocol := binary.BigEndian.Uint16(pppoeHeader[6:8])
+
+		// Log session establishment (LCP) or termination
+		if protocol == 0xc021 { // LCP protocol
+			if len(pppoeHeader) >= 9 { // Additional byte for LCP code
+				lcpCode := pppoeHeader[8]
+				if lcpCode == 1 { // Configure-Request
+					log.Printf("PPPoE Session establishment request, ID: 0x%04x", sessionID)
+				} else if lcpCode == 9 { // Echo-Request (keepalive)
+					// Don't log normal keepalives
+				} else if lcpCode == 5 { // Terminate-Request
+					log.Printf("PPPoE Session termination request, ID: 0x%04x", sessionID)
+				}
+			}
+		} else if protocol == 0x0021 { // IP protocol (established session)
+			// Don't log data packets
+		} else {
+			// Log other protocol packets (like authentication)
+			if protocol != 0 { // Avoid logging padding
+				log.Printf("PPPoE Session packet, ID: 0x%04x, Protocol: 0x%04x", sessionID, protocol)
+			}
+		}
+	}
+
 	// Forward the packet to the appropriate endpoint
 	h.forwardPacket(packet)
 }
 
 // forwardPacket forwards the packet to the appropriate endpoint
 func (h *SessionHandler) forwardPacket(packet []byte) {
-	log.Printf("Forwarding %d byte PPPoE session packet", len(packet))
-
 	// Call the registered forward function if available
 	h.mu.Lock()
 	forwardFunc := h.forwardFunc
@@ -130,10 +159,28 @@ func (h *SessionHandler) InjectPacket(packet []byte) {
 		Ifindex:  h.interfaceIdx,
 	}
 
-	// Send packet to interface
+	// Extract session information for logging
+	if len(packet) >= 20 { // 14 + 6 (Ethernet + PPPoE headers)
+		// Get session ID
+		sessionID := binary.BigEndian.Uint16(packet[16:18])
+
+		// Check for LCP packets (session establishment/termination)
+		if len(packet) >= 22 { // + 2 for protocol
+			protocol := binary.BigEndian.Uint16(packet[20:22])
+
+			if protocol == 0xc021 && len(packet) >= 23 { // LCP protocol
+				lcpCode := packet[22]
+				if lcpCode == 1 { // Configure-Request
+					log.Printf("Injecting PPPoE Session establishment request, ID: 0x%04x", sessionID)
+				} else if lcpCode == 5 { // Terminate-Request
+					log.Printf("Injecting PPPoE Session termination request, ID: 0x%04x", sessionID)
+				}
+			}
+		}
+	}
+
+	// Send packet to interface (don't log regular data packets)
 	if err := unix.Sendto(h.fd, packet, 0, &sa); err != nil {
 		log.Printf("Error injecting session packet: %v", err)
-	} else {
-		log.Printf("Injected %d byte PPPoE session packet", len(packet))
 	}
 }

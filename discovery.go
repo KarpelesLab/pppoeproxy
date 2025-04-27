@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/binary"
 	"fmt"
 	"log"
 	"net"
@@ -96,14 +95,34 @@ func (h *DiscoveryHandler) handlePacket(packet []byte) {
 		return
 	}
 
+	// Get packet type
+	code := pppoeHeader[1]
+
+	// Log the packet with appropriate type description
+	var packetType string
+	switch code {
+	case PADI:
+		packetType = "PADI (Discovery Initiation)"
+	case PADO:
+		packetType = "PADO (Discovery Offer)"
+	case PADR:
+		packetType = "PADR (Discovery Request)"
+	case PADS:
+		packetType = "PADS (Discovery Session-confirmation)"
+	case PADT:
+		packetType = "PADT (Discovery Terminate)"
+	default:
+		packetType = fmt.Sprintf("Unknown (0x%02x)", code)
+	}
+
+	log.Printf("PPPoE Discovery packet received: %s, %d bytes", packetType, len(packet))
+
 	// Forward the packet to the appropriate endpoint
 	h.forwardPacket(packet)
 }
 
 // forwardPacket forwards the packet to the appropriate endpoint
 func (h *DiscoveryHandler) forwardPacket(packet []byte) {
-	log.Printf("Forwarding %d byte PPPoE discovery packet", len(packet))
-
 	// Call the registered forward function if available
 	h.mu.Lock()
 	forwardFunc := h.forwardFunc
@@ -134,10 +153,38 @@ func (h *DiscoveryHandler) InjectPacket(packet []byte) {
 		Ifindex:  h.interfaceIdx,
 	}
 
-	// Send packet to interface
-	if err := unix.Sendto(h.fd, packet, 0, &sa); err != nil {
-		log.Printf("Error injecting discovery packet: %v", err)
+	// Check the packet type
+	if len(packet) >= 15 { // 14 bytes Ethernet header + at least 1 byte for code
+		code := packet[15] // PPPoE packet type code at offset 15
+
+		var packetType string
+		switch code {
+		case PADI:
+			packetType = "PADI (Discovery Initiation)"
+		case PADO:
+			packetType = "PADO (Discovery Offer)"
+		case PADR:
+			packetType = "PADR (Discovery Request)"
+		case PADS:
+			packetType = "PADS (Discovery Session-confirmation)"
+		case PADT:
+			packetType = "PADT (Discovery Terminate)"
+		default:
+			packetType = fmt.Sprintf("Unknown (0x%02x)", code)
+		}
+
+		// Send packet to interface
+		if err := unix.Sendto(h.fd, packet, 0, &sa); err != nil {
+			log.Printf("Error injecting discovery packet (%s): %v", packetType, err)
+		} else {
+			log.Printf("Injected %s PPPoE discovery packet, %d bytes", packetType, len(packet))
+		}
 	} else {
-		log.Printf("Injected %d byte PPPoE discovery packet", len(packet))
+		// Send packet to interface (malformed packet case)
+		if err := unix.Sendto(h.fd, packet, 0, &sa); err != nil {
+			log.Printf("Error injecting malformed discovery packet: %v", err)
+		} else {
+			log.Printf("Injected malformed PPPoE discovery packet, %d bytes", len(packet))
+		}
 	}
 }
