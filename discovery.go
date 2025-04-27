@@ -1,0 +1,172 @@
+package main
+
+import (
+	"encoding/binary"
+	"fmt"
+	"log"
+	"net"
+
+	"golang.org/x/sys/unix"
+)
+
+// PPPoE Discovery Tag types
+const (
+	TagEndOfList    = 0x0000
+	TagServiceName  = 0x0101
+	TagACName       = 0x0102
+	TagHostUniq     = 0x0103
+	TagACCookie     = 0x0104
+	TagVendorSpec   = 0x0105
+	TagRelaySession = 0x0110
+	TagServiceName2 = 0x0201
+	TagACName2      = 0x0203
+	TagGenericError = 0x0203
+)
+
+// PPPoE Packet types
+const (
+	PADI = 0x09
+	PADO = 0x07
+	PADR = 0x19
+	PADS = 0x65
+	PADT = 0xa7
+)
+
+// DiscoveryHandler handles PPPoE discovery packets
+type DiscoveryHandler struct {
+	fd           int
+	isServer     bool
+	interfaceIdx int
+}
+
+// NewDiscoveryHandler creates a new handler for PPPoE discovery packets
+func NewDiscoveryHandler(interfaceName string, isServer bool) (*DiscoveryHandler, error) {
+	// Get interface index
+	iface, err := net.InterfaceByName(interfaceName)
+	if err != nil {
+		return nil, fmt.Errorf("interface not found: %v", err)
+	}
+
+	// Create raw socket for PPPoE discovery packets
+	fd, err := unix.Socket(unix.AF_PACKET, unix.SOCK_RAW, int(htons(PPPoEDiscovery)))
+	if err != nil {
+		return nil, fmt.Errorf("failed to create socket: %v", err)
+	}
+
+	// Bind to the interface
+	addr := unix.SockaddrLinklayer{
+		Protocol: htons(PPPoEDiscovery),
+		Ifindex:  iface.Index,
+	}
+
+	if err := unix.Bind(fd, &addr); err != nil {
+		unix.Close(fd)
+		return nil, fmt.Errorf("failed to bind socket: %v", err)
+	}
+
+	handler := &DiscoveryHandler{
+		fd:           fd,
+		isServer:     isServer,
+		interfaceIdx: iface.Index,
+	}
+
+	// Start packet processing
+	go handler.processPackets()
+
+	return handler, nil
+}
+
+// Close closes the socket
+func (h *DiscoveryHandler) Close() error {
+	return unix.Close(h.fd)
+}
+
+// processPackets receives and processes PPPoE discovery packets
+func (h *DiscoveryHandler) processPackets() {
+	buf := make([]byte, 2048)
+	for {
+		n, _, err := unix.Recvfrom(h.fd, buf, 0)
+		if err != nil {
+			if err == unix.EINTR {
+				continue
+			}
+			log.Printf("Error receiving packet: %v", err)
+			return
+		}
+
+		if n < 20 { // Ethernet header (14) + minimum PPPoE header (6)
+			continue
+		}
+
+		packet := buf[:n]
+		h.handlePacket(packet)
+	}
+}
+
+// handlePacket processes a PPPoE discovery packet
+func (h *DiscoveryHandler) handlePacket(packet []byte) {
+	// Skip the Ethernet header (14 bytes)
+	pppoeHeader := packet[14:]
+
+	// Check if this is a PPPoE Discovery packet
+	if pppoeHeader[0] != 0x11 { // PPPoE version 1, type 1
+		return
+	}
+
+	// Extract packet type code
+	code := pppoeHeader[1]
+
+	// If we're in server mode and this is a PADI, handle Host-Uniq rewriting
+	if h.isServer && code == PADI {
+		h.rewriteHostUniq(packet)
+	}
+
+	// Forward the packet to the appropriate endpoint
+	h.forwardPacket(packet)
+}
+
+// rewriteHostUniq rewrites the Host-Uniq tag in a PADI packet
+func (h *DiscoveryHandler) rewriteHostUniq(packet []byte) {
+	// PPPoE header is 6 bytes, so tags start at offset 20 (14 + 6)
+	offset := 20
+
+	// Process all tags
+	for offset+4 <= len(packet) {
+		tagType := binary.BigEndian.Uint16(packet[offset : offset+2])
+		tagLen := binary.BigEndian.Uint16(packet[offset+2 : offset+4])
+
+		if tagType == TagHostUniq && offset+4+int(tagLen) <= len(packet) {
+			// Found Host-Uniq tag, rewrite it with our shared secret-based value
+			// In a real implementation, this would be more sophisticated
+			// For now, we just XOR the value with a byte from the shared secret
+			for i := 0; i < int(tagLen); i++ {
+				packet[offset+4+i] ^= byte((*sharedSecret)[i%len(*sharedSecret)])
+			}
+			return
+		}
+
+		// Move to next tag
+		offset += 4 + int(tagLen)
+
+		// End of tags
+		if tagType == TagEndOfList {
+			break
+		}
+	}
+}
+
+// forwardPacket forwards the packet to the appropriate endpoint
+func (h *DiscoveryHandler) forwardPacket(packet []byte) {
+	// In a real implementation, this would forward the packet to the client or server
+	// based on the mode and the packet type
+	log.Printf("Forwarding %d byte PPPoE discovery packet", len(packet))
+
+	// This is a placeholder for the actual forwarding logic
+	// The actual implementation would depend on how clients and servers communicate
+	// For example, via TCP/IP or by injecting packets to another interface
+}
+
+// htons converts a short from host byte order to network byte order
+func htons(i uint16) uint16 {
+	return (i<<8)&0xff00 | i>>8
+}
