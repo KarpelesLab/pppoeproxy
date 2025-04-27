@@ -1,0 +1,3 @@
+PROJECT_NAME=pppoeproxy
+DIST_ARCHS=linux_amd64 linux_arm64
+export CGO_ENABLED=0
