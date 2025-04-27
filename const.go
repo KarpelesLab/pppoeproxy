@@ -8,8 +8,10 @@ const (
 
 // Protocol packet types
 const (
-	PacketTypeDiscovery = 1 // Discovery packet type for tunnel
-	PacketTypeSession   = 2 // Session packet type for tunnel
+	PacketTypePing      = 0 // Ping packet for keepalive
+	PacketTypePong      = 1 // Pong response to ping
+	PacketTypeDiscovery = 2 // Discovery packet type for tunnel
+	PacketTypeSession   = 3 // Session packet type for tunnel
 )
 
 // PPPoE Discovery Tag types

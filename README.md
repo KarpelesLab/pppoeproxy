@@ -22,6 +22,9 @@ The system operates in either client or server mode:
 - Host-Uniq tag rewriting for secure client-server authentication
 - Raw socket handling for efficient packet capture and injection
 - IP-based access control for client connections
+- Automatic reconnection for client mode
+- Ping/pong keepalive mechanism (60-second interval)
+- Thread-safe connection handling
 
 ## Usage
 
