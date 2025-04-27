@@ -9,11 +9,6 @@ import (
 	"golang.org/x/sys/unix"
 )
 
-const (
-	PPPoEDiscovery = 0x8863
-	PPPoESession   = 0x8864
-)
-
 var (
 	interfaceName = flag.String("interface", "", "Interface to bind to")
 	mode          = flag.String("mode", "client", "Mode (client or server)")

@@ -10,12 +10,6 @@ import (
 	"sync"
 )
 
-// Protocol packet types
-const (
-	PacketTypeDiscovery = 1
-	PacketTypeSession   = 2
-)
-
 // Proxy handles the client-server communication
 type Proxy struct {
 	isServer         bool
