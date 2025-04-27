@@ -87,6 +87,17 @@ sudo ./pppoeproxy -interface pppoe-proxy -mode server -address 0.0.0.0:8000 -all
 
 Replace `192.168.1.2` with the IP address of your remote client device.
 
+#### Ubiquiti Dream Machine Firewall Configuration
+
+If you're running the server on a Ubiquiti Dream Machine (UDM/UDM-Pro), you'll need to open the port in the firewall to allow incoming connections from your client:
+
+```bash
+# SSH into your UDM and run:
+iptables -I UBIOS_WAN_LOCAL_USER -p tcp --dport 8000 --src 192.168.1.2 -j ACCEPT
+```
+
+Replace `8000` with your server port and `192.168.1.2` with your client IP address.
+
 ### Running the Client
 
 On the remote device:
