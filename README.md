@@ -109,9 +109,25 @@ sudo pppd plugin rp-pppoe.so eth0 user "your-username" password "your-password" 
 
 Once connected, the remote device will have its own public IP address through the NTT line.
 
-## Building
+## Installation
 
+### Download Pre-built Binary
+
+You can download a pre-built version of pppoeproxy using the following command:
+
+```bash
+curl -s https://raw.githubusercontent.com/KarpelesLab/make-go/master/get.sh | /bin/sh -s pppoeproxy
 ```
+
+This will automatically download the appropriate binary for your system architecture.
+
+### Building from Source
+
+If you prefer to build from source:
+
+```bash
+git clone https://github.com/KarpelesLab/pppoeproxy.git
+cd pppoeproxy
 make
 ```
 
