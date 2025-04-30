@@ -11,6 +11,58 @@ import (
 	"time"
 )
 
+// Client represents a network connection with synchronized access
+type Client struct {
+	conn       net.Conn
+	writeMu    sync.Mutex // Mutex for connection writes
+	remoteAddr string
+}
+
+// NewClient creates a new Client instance
+func NewClient(conn net.Conn) *Client {
+	return &Client{
+		conn:       conn,
+		remoteAddr: conn.RemoteAddr().String(),
+	}
+}
+
+// Close closes the client connection
+func (c *Client) Close() error {
+	return c.conn.Close()
+}
+
+// WritePacket writes a complete packet atomically
+func (c *Client) WritePacket(packetType uint16, data []byte) error {
+	c.writeMu.Lock()
+	defer c.writeMu.Unlock()
+
+	// Write packet type
+	if err := binary.Write(c.conn, binary.BigEndian, packetType); err != nil {
+		return fmt.Errorf("error writing packet type: %v", err)
+	}
+
+	// Write length as varint
+	length := len(data)
+	for length >= 0x80 {
+		if _, err := c.conn.Write([]byte{byte(length) | 0x80}); err != nil {
+			return fmt.Errorf("error writing length: %v", err)
+		}
+		length >>= 7
+	}
+	if _, err := c.conn.Write([]byte{byte(length)}); err != nil {
+		return fmt.Errorf("error writing length: %v", err)
+	}
+
+	// Write data
+	if len(data) > 0 {
+		if _, err := c.conn.Write(data); err != nil {
+			return fmt.Errorf("error writing data: %v", err)
+		}
+	}
+
+	return nil
+}
+
 // Proxy handles the client-server communication
 type Proxy struct {
 	isServer         bool
@@ -19,12 +71,12 @@ type Proxy struct {
 	discoveryHandler *DiscoveryHandler
 	sessionHandler   *SessionHandler
 	listener         net.Listener
-	conn             net.Conn
+	server           *Client
 	clientsMu        sync.RWMutex
-	clients          map[string]net.Conn
+	clients          map[string]*Client
 	closed           bool
 	closedCh         chan struct{}
-	connMu           sync.Mutex   // Mutex for connection access
+	serverMu         sync.Mutex   // Mutex for server connection access
 	reconnectTimer   *time.Timer  // Timer for reconnection attempts
 	pingTicker       *time.Ticker // Ticker for sending pings
 }
@@ -37,7 +89,7 @@ func NewProxy(isServer bool, address, allowedIP string, discoveryHandler *Discov
 		allowedIP:        allowedIP,
 		discoveryHandler: discoveryHandler,
 		sessionHandler:   sessionHandler,
-		clients:          make(map[string]net.Conn),
+		clients:          make(map[string]*Client),
 		closedCh:         make(chan struct{}),
 	}
 
@@ -74,16 +126,16 @@ func (p *Proxy) Close() error {
 		p.listener.Close()
 	}
 
-	p.connMu.Lock()
-	if p.conn != nil {
-		p.conn.Close()
-		p.conn = nil
+	p.serverMu.Lock()
+	if p.server != nil {
+		p.server.Close()
+		p.server = nil
 	}
-	p.connMu.Unlock()
+	p.serverMu.Unlock()
 
 	p.clientsMu.Lock()
-	for _, conn := range p.clients {
-		conn.Close()
+	for _, client := range p.clients {
+		client.Close()
 	}
 	p.clientsMu.Unlock()
 
@@ -117,23 +169,17 @@ func (p *Proxy) sendPing() {
 		return
 	}
 
-	p.connMu.Lock()
-	conn := p.conn
-	p.connMu.Unlock()
+	p.serverMu.Lock()
+	server := p.server
+	p.serverMu.Unlock()
 
-	if conn == nil {
+	if server == nil {
 		return
 	}
 
-	// Send ping packet (type 0, zero length)
-	if err := binary.Write(conn, binary.BigEndian, uint16(PacketTypePing)); err != nil {
+	// Send ping packet (type 0, empty data)
+	if err := server.WritePacket(PacketTypePing, []byte{}); err != nil {
 		log.Printf("Error sending ping: %v", err)
-		return
-	}
-
-	// Send zero length (single byte 0)
-	if _, err := conn.Write([]byte{0}); err != nil {
-		log.Printf("Error sending ping length: %v", err)
 		return
 	}
 
@@ -202,12 +248,13 @@ func (p *Proxy) acceptClients() {
 			continue
 		}
 
+		client := NewClient(conn)
 		log.Printf("Accepted connection from %s", clientIP)
 		p.clientsMu.Lock()
-		p.clients[conn.RemoteAddr().String()] = conn
+		p.clients[client.remoteAddr] = client
 		p.clientsMu.Unlock()
 
-		go p.handleClient(conn)
+		go p.handleClient(client)
 	}
 }
 
@@ -222,20 +269,20 @@ func (p *Proxy) isClientAllowed(clientIP string) bool {
 }
 
 // handleClient processes packets from a connected client
-func (p *Proxy) handleClient(conn net.Conn) {
+func (p *Proxy) handleClient(client *Client) {
 	defer func() {
-		conn.Close()
+		client.Close()
 		p.clientsMu.Lock()
-		delete(p.clients, conn.RemoteAddr().String())
+		delete(p.clients, client.remoteAddr)
 		p.clientsMu.Unlock()
-		log.Printf("Client %s disconnected", conn.RemoteAddr())
+		log.Printf("Client %s disconnected", client.remoteAddr)
 	}()
 
 	buffer := make([]byte, 4096)
 	for {
 		// Read packet type (uint16)
 		var packetType uint16
-		if err := binary.Read(conn, binary.BigEndian, &packetType); err != nil {
+		if err := binary.Read(client.conn, binary.BigEndian, &packetType); err != nil {
 			if err == io.EOF {
 				return
 			}
@@ -252,7 +299,7 @@ func (p *Proxy) handleClient(conn net.Conn) {
 				return
 			}
 
-			_, err := conn.Read(buffer[:1])
+			_, err := client.conn.Read(buffer[:1])
 			if err != nil {
 				log.Printf("Error reading varint: %v", err)
 				return
@@ -276,29 +323,30 @@ func (p *Proxy) handleClient(conn net.Conn) {
 		switch packetType {
 		case PacketTypePing:
 			// Respond with pong
-			if err := binary.Write(conn, binary.BigEndian, uint16(PacketTypePong)); err != nil {
+			if err := client.WritePacket(PacketTypePong, []byte{}); err != nil {
 				log.Printf("Error sending pong: %v", err)
 				return
 			}
-			if _, err := conn.Write([]byte{0}); err != nil { // Zero length
-				log.Printf("Error sending pong length: %v", err)
-				return
-			}
-			log.Printf("Received ping from client %s, sent pong", conn.RemoteAddr())
+			log.Printf("Received ping from client %s, sent pong", client.remoteAddr)
 
 		case PacketTypePong:
 			// Just log receipt of pong
-			log.Printf("Received pong from client %s", conn.RemoteAddr())
+			log.Printf("Received pong from client %s", client.remoteAddr)
 
 		case PacketTypeDiscovery, PacketTypeSession:
+			// Resize buffer if needed
 			if length > uint64(len(buffer)) {
-				log.Printf("Packet too large: %d bytes", length)
-				return
+				newSize := length
+				if newSize > 65536 {
+					log.Printf("Packet too large: %d bytes", length)
+					return
+				}
+				buffer = make([]byte, newSize)
 			}
 
 			// Read packet data for non-zero length packets
 			if length > 0 {
-				if _, err := io.ReadFull(conn, buffer[:length]); err != nil {
+				if _, err := io.ReadFull(client.conn, buffer[:length]); err != nil {
 					log.Printf("Error reading packet data: %v", err)
 					return
 				}
@@ -314,10 +362,15 @@ func (p *Proxy) handleClient(conn net.Conn) {
 			}
 
 		default:
-			log.Printf("Unknown packet type from client %s: %d", conn.RemoteAddr(), packetType)
+			log.Printf("Unknown packet type from client %s: %d", client.remoteAddr, packetType)
 			// Skip any data associated with an unknown packet type
 			if length > 0 {
-				if _, err := io.ReadFull(conn, buffer[:length]); err != nil {
+				if length > 1048576 { // 1MB limit for skipping
+					log.Printf("Unknown packet too large to skip: %d bytes", length)
+					return
+				}
+
+				if _, err := io.CopyN(io.Discard, client.conn, int64(length)); err != nil {
 					log.Printf("Error skipping unknown packet data: %v", err)
 					return
 				}
@@ -328,39 +381,36 @@ func (p *Proxy) handleClient(conn net.Conn) {
 
 // connectToServer connects to the remote server
 func (p *Proxy) connectToServer() error {
-	p.connMu.Lock()
-	defer p.connMu.Unlock()
+	p.serverMu.Lock()
+	defer p.serverMu.Unlock()
 
 	// Close existing connection if any
-	if p.conn != nil {
-		p.conn.Close()
-		p.conn = nil
+	if p.server != nil {
+		p.server.Close()
+		p.server = nil
 	}
 
-	var err error
 	conn, err := net.Dial("tcp", p.address)
 	if err != nil {
 		return fmt.Errorf("failed to connect to server: %v", err)
 	}
 
-	p.conn = conn
+	p.server = NewClient(conn)
 	log.Printf("Connected to server at %s", p.address)
-	go p.handleServerConnection()
+	go p.handleServerConnection(p.server)
 	return nil
 }
 
 // handleServerConnection processes packets from the server
-func (p *Proxy) handleServerConnection() {
-	conn := p.conn // Local reference to the connection
-
+func (p *Proxy) handleServerConnection(client *Client) {
 	defer func() {
-		p.connMu.Lock()
-		if p.conn == conn {
-			p.conn = nil
+		p.serverMu.Lock()
+		if p.server == client {
+			p.server = nil
 		}
-		p.connMu.Unlock()
+		p.serverMu.Unlock()
 
-		conn.Close()
+		client.Close()
 		log.Printf("Disconnected from server")
 
 		// Schedule reconnection if we're not closing
@@ -373,7 +423,7 @@ func (p *Proxy) handleServerConnection() {
 	for {
 		// Read packet type (uint16)
 		var packetType uint16
-		if err := binary.Read(conn, binary.BigEndian, &packetType); err != nil {
+		if err := binary.Read(client.conn, binary.BigEndian, &packetType); err != nil {
 			if err == io.EOF || p.closed {
 				return
 			}
@@ -390,7 +440,7 @@ func (p *Proxy) handleServerConnection() {
 				return
 			}
 
-			_, err := conn.Read(buffer[:1])
+			_, err := client.conn.Read(buffer[:1])
 			if err != nil {
 				log.Printf("Error reading varint from server: %v", err)
 				return
@@ -414,12 +464,8 @@ func (p *Proxy) handleServerConnection() {
 		switch packetType {
 		case PacketTypePing:
 			// Respond with pong
-			if err := binary.Write(conn, binary.BigEndian, uint16(PacketTypePong)); err != nil {
+			if err := client.WritePacket(PacketTypePong, []byte{}); err != nil {
 				log.Printf("Error sending pong: %v", err)
-				return
-			}
-			if _, err := conn.Write([]byte{0}); err != nil { // Zero length
-				log.Printf("Error sending pong length: %v", err)
 				return
 			}
 			log.Printf("Received ping, sent pong")
@@ -429,14 +475,19 @@ func (p *Proxy) handleServerConnection() {
 			log.Printf("Received pong from server")
 
 		case PacketTypeDiscovery, PacketTypeSession:
+			// Resize buffer if needed
 			if length > uint64(len(buffer)) {
-				log.Printf("Packet from server too large: %d bytes", length)
-				return
+				newSize := length
+				if newSize > 65536 {
+					log.Printf("Packet from server too large: %d bytes", length)
+					return
+				}
+				buffer = make([]byte, newSize)
 			}
 
 			// Read packet data for non-zero length packets
 			if length > 0 {
-				if _, err := io.ReadFull(conn, buffer[:length]); err != nil {
+				if _, err := io.ReadFull(client.conn, buffer[:length]); err != nil {
 					log.Printf("Error reading packet data from server: %v", err)
 					return
 				}
@@ -455,7 +506,12 @@ func (p *Proxy) handleServerConnection() {
 			log.Printf("Unknown packet type from server: %d", packetType)
 			// Skip any data associated with an unknown packet type
 			if length > 0 {
-				if _, err := io.ReadFull(conn, buffer[:length]); err != nil {
+				if length > 1048576 { // 1MB limit for skipping
+					log.Printf("Unknown packet too large to skip: %d bytes", length)
+					return
+				}
+
+				if _, err := io.CopyN(io.Discard, client.conn, int64(length)); err != nil {
 					log.Printf("Error skipping unknown packet data: %v", err)
 					return
 				}
@@ -479,68 +535,25 @@ func (p *Proxy) handleDiscoveryPacket(packet []byte) {
 			return
 		}
 
-		// Prepare packet header
-		for _, conn := range p.clients {
-			// Send packet type
-			if err := binary.Write(conn, binary.BigEndian, uint16(PacketTypeDiscovery)); err != nil {
-				log.Printf("Error sending packet type: %v", err)
-				continue
-			}
-
-			// Send varint length
-			length := len(packet)
-			for length >= 0x80 {
-				if _, err := conn.Write([]byte{byte(length) | 0x80}); err != nil {
-					log.Printf("Error sending length: %v", err)
-					continue
-				}
-				length >>= 7
-			}
-			if _, err := conn.Write([]byte{byte(length)}); err != nil {
-				log.Printf("Error sending length: %v", err)
-				continue
-			}
-
-			// Send packet data
-			if _, err := conn.Write(packet); err != nil {
-				log.Printf("Error sending packet data: %v", err)
-				continue
+		// Broadcast to all clients
+		for _, client := range p.clients {
+			if err := client.WritePacket(PacketTypeDiscovery, packet); err != nil {
+				log.Printf("Error sending discovery packet to client %s: %v", client.remoteAddr, err)
 			}
 		}
 	} else {
 		// In client mode, send to server
-		p.connMu.Lock()
-		conn := p.conn
-		p.connMu.Unlock()
+		p.serverMu.Lock()
+		server := p.server
+		p.serverMu.Unlock()
 
-		if conn == nil {
+		if server == nil {
 			return
 		}
 
-		// Send packet type
-		if err := binary.Write(conn, binary.BigEndian, uint16(PacketTypeDiscovery)); err != nil {
-			log.Printf("Error sending packet type to server: %v", err)
-			return
-		}
-
-		// Send varint length
-		length := len(packet)
-		for length >= 0x80 {
-			if _, err := conn.Write([]byte{byte(length) | 0x80}); err != nil {
-				log.Printf("Error sending length to server: %v", err)
-				return
-			}
-			length >>= 7
-		}
-		if _, err := conn.Write([]byte{byte(length)}); err != nil {
-			log.Printf("Error sending length to server: %v", err)
-			return
-		}
-
-		// Send packet data
-		if _, err := conn.Write(packet); err != nil {
-			log.Printf("Error sending packet data to server: %v", err)
-			return
+		// Send to server
+		if err := server.WritePacket(PacketTypeDiscovery, packet); err != nil {
+			log.Printf("Error sending discovery packet to server: %v", err)
 		}
 	}
 }
@@ -560,68 +573,25 @@ func (p *Proxy) handleSessionPacket(packet []byte) {
 			return
 		}
 
-		// Prepare packet header
-		for _, conn := range p.clients {
-			// Send packet type
-			if err := binary.Write(conn, binary.BigEndian, uint16(PacketTypeSession)); err != nil {
-				log.Printf("Error sending packet type: %v", err)
-				continue
-			}
-
-			// Send varint length
-			length := len(packet)
-			for length >= 0x80 {
-				if _, err := conn.Write([]byte{byte(length) | 0x80}); err != nil {
-					log.Printf("Error sending length: %v", err)
-					continue
-				}
-				length >>= 7
-			}
-			if _, err := conn.Write([]byte{byte(length)}); err != nil {
-				log.Printf("Error sending length: %v", err)
-				continue
-			}
-
-			// Send packet data
-			if _, err := conn.Write(packet); err != nil {
-				log.Printf("Error sending packet data: %v", err)
-				continue
+		// Broadcast to all clients
+		for _, client := range p.clients {
+			if err := client.WritePacket(PacketTypeSession, packet); err != nil {
+				log.Printf("Error sending session packet to client %s: %v", client.remoteAddr, err)
 			}
 		}
 	} else {
 		// In client mode, send to server
-		p.connMu.Lock()
-		conn := p.conn
-		p.connMu.Unlock()
+		p.serverMu.Lock()
+		server := p.server
+		p.serverMu.Unlock()
 
-		if conn == nil {
+		if server == nil {
 			return
 		}
 
-		// Send packet type
-		if err := binary.Write(conn, binary.BigEndian, uint16(PacketTypeSession)); err != nil {
-			log.Printf("Error sending packet type to server: %v", err)
-			return
-		}
-
-		// Send varint length
-		length := len(packet)
-		for length >= 0x80 {
-			if _, err := conn.Write([]byte{byte(length) | 0x80}); err != nil {
-				log.Printf("Error sending length to server: %v", err)
-				return
-			}
-			length >>= 7
-		}
-		if _, err := conn.Write([]byte{byte(length)}); err != nil {
-			log.Printf("Error sending length to server: %v", err)
-			return
-		}
-
-		// Send packet data
-		if _, err := conn.Write(packet); err != nil {
-			log.Printf("Error sending packet data to server: %v", err)
-			return
+		// Send to server
+		if err := server.WritePacket(PacketTypeSession, packet); err != nil {
+			log.Printf("Error sending session packet to server: %v", err)
 		}
 	}
 }
